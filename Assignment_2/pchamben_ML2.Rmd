@@ -1,1 +1,266 @@
+---
+title: "KNN Classifier"
+author: "Prajwal C N"
+date: "17/02/2021"
+output:
+  html_document:
+    theme: readable
+    highlight: haddock
+  pdf_document: default
+---
+
+#### Loading R libraries
+```{r, warning=FALSE, message=FALSE}
+library(readr)
+library(dplyr)
+library(fastDummies)
+library(ggplot2)
+library(caret)
+library(class)
+library(gmodels)
+```
+
+#### Importing the UniversalBank dataset
+```{r,message=FALSE}
+UniversalBank <- read_csv("UniversalBank.csv")
+
+# Inspecting data
+head(UniversalBank)
+```
+
+
+Examining the dataset
+```{r}
+glimpse(UniversalBank)
+```
+
+
+Summary statistics of dataset
+```{r}
+summary(UniversalBank)
+```
+
+
+#### Data cleaning and Exploratory Data Analysis
+From observation, **ID** and **ZIP code** columns are not essential to predict the outcome. Hence dropping these columns.
+```{r}
+UniversalBank <- UniversalBank %>% select(-c('ID', "ZIP Code"))
+```
+
+
+Checking NULL values in the dataset at column level.
+```{r}
+apply(UniversalBank,2,function(x){any(is.na(x))})
+```
+
+
+Here **Personal Loan** is a target variable, therefore we must convert into categorical variable. Also, Education level has to be categorical variable.
+```{r}
+UniversalBank$`Personal Loan` <- as.factor(UniversalBank$`Personal Loan`)
+UniversalBank$Education <- as.factor(UniversalBank$Education)
+```
+
+
+Converting category variable to numeric variable.
+```{r}
+UniversalBank_d <- dummy_cols(UniversalBank %>% select(-`Personal Loan`))
+UniversalBank_d <- UniversalBank_d %>% select(-Education) %>% 
+  mutate(`Personal Loan` = UniversalBank$`Personal Loan`)
+```
+
+
+**Visualization**  
+Checking the loan acceptance based on the Education Levels.  
+```{r, message=FALSE, warning=FALSE}
+UniversalBank %>% group_by(Education, `Personal Loan`) %>% summarise(count = n()) %>% 
+ggplot(aes(x = Education, y = count, fill = `Personal Loan`)) + geom_col(position = 'dodge') + 
+  labs(x = 'Levels of Education', y = 'Number of Loans', 
+       title = "Loan acceptance status based on Education", 
+       fill = "Status") + scale_fill_discrete(labels  = c('Rejected','Accepted')) + theme_classic()
+```
+
+
+From above graph we can infer that when education level increases, chances of loan acceptance rate also increase.  
+
+
+
+
+Checking the distribution of mortgage column.
+```{r, message=FALSE, warning=FALSE}
+ggplot(UniversalBank, aes(x = Mortgage)) + geom_histogram(fill = 'blue') + 
+  labs(x="Mortgage", y="Count",title = "Probability Distribution of Mortgage") +
+  theme_classic()
+```
+
+
+From the above plot we can see that data is right skewed. Hence, applying **log** transformation. 
+```{r, message=FALSE, warning=FALSE}
+ggplot(UniversalBank, aes(x = log(Mortgage))) + geom_histogram(fill = 'blue') +
+  labs(x="Mortgage", y="Count",title = "Probability Distribution of log(Mortgage)") +
+  theme_classic()
+```
+
+
+Checking the outliers in 'Income' column.
+```{r, message=FALSE, warning=FALSE}
+ggplot(UniversalBank, aes(x = `Personal Loan`, y = Income)) + geom_boxplot() +
+  labs(title = "Boxplot of Income vs Personal Loan")
+```
+
+
+Checking the outliers in 'Mortgage' column.  
+```{r, message=FALSE, warning=FALSE}
+ggplot(UniversalBank, aes(x = `Personal Loan`, y = Mortgage)) + geom_boxplot() +
+  labs(title = "Boxplot of Mortgage vs Personal Loan")
+```
+
+
+There seems to be few outliers in both 'Income' and 'Mortgage' columns.  
+
+
+#### Pre-Processing of data
+**Splitting dataset into training (60%) and validation (40%) sets**
+```{r, message=FALSE, warning=FALSE}
+set.seed(23)
+index <- createDataPartition(UniversalBank_d$`Personal Loan`, p=0.6, list = FALSE)
+UniversalBank_train_df <- UniversalBank_d[index,]
+UniversalBank_test_df <- UniversalBank_d[-index,]
+```
+
+
+Defining a function to normalize the data.
+```{r, message=FALSE, warning=FALSE}
+normalize <- function
+(x){
+  return((x-min(x))/(max(x)-min(x)))
+}
+
+# Applying the above function for data normalization
+UniversalBank_train_norm <- as.data.frame(lapply(UniversalBank_train_df[,-14], normalize))
+UniversalBank_test_norm <- as.data.frame(lapply(UniversalBank_test_df[,-14], normalize))
+
+# Summary statistics of normalized data
+summary(UniversalBank_train_norm)
+```
+
+
+#### Model Construction
+*Q1:* Building KNN model with Sample test data and **k=1**.
+```{r}
+# Test data
+Sample1 <- data.frame(Age = 40, Experience = 10, Income = 84, Family = 2, CCAvg = 2, 
+                    Mortgage = 0, Securities.Account = 0, CD.Account = 0, Online = 1, 
+                    CreditCard = 1, Education_1 = 0, Education_2 = 1,Education_3 = 0)
+```
+
+
+**Model**
+```{r}
+(knn_model_test1 <- knn(UniversalBank_train_norm,Sample1, 
+                        cl = UniversalBank_train_df$`Personal Loan`,k = 1, prob = TRUE))
+```
+
+
+For the above sample data, model is predicted that loan will be **accepted**.  
+
+
+*Q2:* **Choosing K**  
+```{r}
+k_choice_df <- data.frame(k = seq(1,20,1), accuracy = rep(0,20))
+
+for(i in 1:20){
+  k_choice <- knn(UniversalBank_train_norm, 
+                  UniversalBank_test_norm, cl = UniversalBank_train_df$`Personal Loan`, 
+                  k=i)
+  k_choice_df[i,2] <- confusionMatrix(k_choice, 
+                                      UniversalBank_test_df$`Personal Loan`)$overall[1]
+}
+k_choice_df %>% ggplot(aes(x = k, y = accuracy)) + geom_line() + 
+  labs(x = "K", y = 'Accuracy', title = 'Finding Best K') + 
+  theme_classic()
+head(k_choice_df)
+```
+
+
+From the above plot we can infer that K started decreasing at 4, and further model started overfitting.  
+
+
+*Q3:* Considering the best **K = 4**  
+```{r, message=FALSE, warning=FALSE}
+best_model <- knn(UniversalBank_train_norm, 
+                  UniversalBank_test_norm, cl = UniversalBank_train_df$`Personal Loan`, 
+                  k=4)
+```
+
+
+#### Performance Metrics
+Confusion matrix of best model.
+```{r, message=FALSE, warning=FALSE}
+Test_labs <- UniversalBank_test_df$`Personal Loan`
+predicted_labs <- best_model
+CrossTable(x=Test_labs, y =predicted_labs, prop.chisq = FALSE)
+```
+**Accuracy** -> ```r round(confusionMatrix(Test_labs, predicted_labs)$overall[1], 3)```
+**Sensitivity** -> ```r round(confusionMatrix(Test_labs, predicted_labs)$byClass[1], 3)```
+**Specificity** -> ```r round(confusionMatrix(Test_labs, predicted_labs)$byClass[2], 3)```
+**Precision** -> ```r round(confusionMatrix(Test_labs, predicted_labs)$byClass[5], 3)```
+**Recall** -> ```r round(confusionMatrix(Test_labs, predicted_labs)$byClass[6], 3)```
+
+*Q4:* Predicting the sample test data with best model.
+```{r, message=FALSE, warning=FALSE}
+(knn_model_test1 <- knn(UniversalBank_train_norm,Sample1,
+                        cl = UniversalBank_train_df$`Personal Loan`,k = 4, prob = TRUE))
+```
+
+
+#### Scenario 2
+*Q5:* **Splitting dataset into training, validation, and test sets (50% : 30% : 20%)**
+```{r, message=FALSE, warning=FALSE}
+index2 <- createDataPartition(UniversalBank_d$`Personal Loan`, p=0.5, list = FALSE)
+UniversalBank_train_df2 <- UniversalBank_d[index2,]
+test_val_df2 <- UniversalBank_d[-index2,]
+val_id <- createDataPartition(test_val_df2$`Personal Loan`, p=0.6, list = FALSE)
+UniversalBank_Validation_df2 <- test_val_df2[val_id,]
+UniversalBank_test_df2 <- test_val_df2[-val_id,]
+
+#Data Normalization
+UniversalBank_train_norm2 <- as.data.frame(lapply(UniversalBank_train_df2[,-14], normalize))
+UniversalBank_test_norm2 <- as.data.frame(lapply(UniversalBank_test_df2[,-14], normalize))
+UniversalBank_Validation_norm2 <- as.data.frame(lapply(UniversalBank_Validation_df2[,-14], normalize))
+```
+
+
+Data Modeling with best model is k = 4
+```{r, message=FALSE, warning=FALSE}
+best_model2 <- knn(UniversalBank_train_norm2,
+                   UniversalBank_Validation_norm2, cl=UniversalBank_train_df2$`Personal Loan`, 
+                   k=4, prob = TRUE)
+```
+
+
+#### Performance Metrics 
+Confusion matrix of best model.
+```{r, message=FALSE, warning=FALSE}
+Test_labs2 <- UniversalBank_Validation_df2$`Personal Loan`
+predicted_labs2 <- best_model2
+CrossTable(x=Test_labs2, y =predicted_labs2, prop.chisq = FALSE)
+```
+**Accuracy** -> ```r round(confusionMatrix(Test_labs2, predicted_labs2)$overall[1], 3)```
+**Sensitivity** -> ```r round(confusionMatrix(Test_labs2, predicted_labs2)$byClass[1], 3)```
+**Specificity** -> ```r round(confusionMatrix(Test_labs2, predicted_labs2)$byClass[2], 3)```
+**Precision** -> ```r round(confusionMatrix(Test_labs2, predicted_labs2)$byClass[5], 3)```
+**Recall** -> ```r round(confusionMatrix(Test_labs2, predicted_labs2)$byClass[6], 3)```
+
+
+**Conclusion:**   
+
+
+**From both performance metrics, we can infer that the amount of sample data considered for training causes slight variations in the model accuracy. Hence, more the training data there are more chances of achieving higher accuracy.**
+
+
+
+
+
+
+
 

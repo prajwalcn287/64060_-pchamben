@@ -130,14 +130,9 @@ UniversalBank_test_df <- UniversalBank_d[-index,]
 
 Defining a function to normalize the data.
 ```{r, message=FALSE, warning=FALSE}
-normalize <- function
-(x){
-  return((x-min(x))/(max(x)-min(x)))
-}
-
-# Applying the above function for data normalization
-UniversalBank_train_norm <- as.data.frame(lapply(UniversalBank_train_df[,-14], normalize))
-UniversalBank_test_norm <- as.data.frame(lapply(UniversalBank_test_df[,-14], normalize))
+scale_fun <- preProcess(UniversalBank_train_df[,-14], method = c("center", "scale"))
+UniversalBank_train_norm <- predict(scale_fun, UniversalBank_train_df[,-14])
+UniversalBank_test_norm <- predict(scale_fun, UniversalBank_test_df[,-14])
 
 # Summary statistics of normalized data
 summary(UniversalBank_train_norm)
@@ -224,9 +219,10 @@ UniversalBank_Validation_df2 <- test_val_df2[val_id,]
 UniversalBank_test_df2 <- test_val_df2[-val_id,]
 
 #Data Normalization
-UniversalBank_train_norm2 <- as.data.frame(lapply(UniversalBank_train_df2[,-14], normalize))
-UniversalBank_test_norm2 <- as.data.frame(lapply(UniversalBank_test_df2[,-14], normalize))
-UniversalBank_Validation_norm2 <- as.data.frame(lapply(UniversalBank_Validation_df2[,-14], normalize))
+scale_fun2 <- preProcess(UniversalBank_train_df2[,-14], method = c("center", "scale"))
+UniversalBank_train_norm2 <- predict(scale_fun2, UniversalBank_train_df2[,-14])
+UniversalBank_test_norm2 <- predict(scale_fun2, UniversalBank_test_df2[,-14])
+UniversalBank_Validation_norm2 <- predict(scale_fun2, UniversalBank_Validation_df2[,-14])
 ```
 
 

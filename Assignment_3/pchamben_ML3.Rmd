@@ -1,0 +1,304 @@
+---
+title: "Naive Bayes Classifier"
+author: "Prajwal C N"
+date: "04/03/2021"
+output: 
+  html_document:
+    theme: readable
+    highlight: haddock
+---
+
+#### Loading R libraries
+```{r, warning=FALSE, message=FALSE}
+library(readr)
+library(reshape2)
+library(dplyr)
+library(e1071)
+library(ggplot2)
+library(caret)
+library(class)
+library(gmodels)
+library(pROC)
+```
+
+
+#### Importing the UniversalBank dataset
+```{r,message=FALSE}
+UniversalBank <- read_csv("UniversalBank.csv")
+
+```
+
+
+Given we focus on two predictors: Online and Credit Card, and the outcome Personal Loan. So Converting these variables to factors
+```{r,message=FALSE}
+UniversalBank <- UniversalBank %>% mutate(`Personal Loan` = as.factor(`Personal Loan`), 
+                         Online = as.factor(Online),
+                         CreditCard = as.factor(CreditCard))
+
+#Examining the dataset
+glimpse(UniversalBank)
+```
+
+
+#### Data cleaning and Exploratory Data Analysis
+Checking summary for each categorical variable
+```{r}
+summary(UniversalBank %>%  select(`Personal Loan`, Online, CreditCard))
+```
+
+
+Checking NULL values in the dataset at column level.
+```{r}
+apply(UniversalBank,2,function(x){any(is.na(x))})
+```
+
+
+**Visualization**
+
+
+Visualizing distribution of each categorical variable.
+
+
+1) Credit Card category
+```{r, message=FALSE, warning=FALSE}
+ggplot(UniversalBank, aes(x=CreditCard, y=..prop..,group = 1)) + 
+  geom_bar(fill="light blue") +
+  theme_classic() + 
+  geom_text(aes(label=round(..prop..,2)),stat = "count",
+            position = position_stack(vjust=0.5)) + 
+  labs(y = 'Proportion', title = "Proportion of Credit Card users") +
+  scale_x_discrete(labels = c("Non Card Holders","Card Holders"))
+```
+
+
+From the above graph we can infer that majority of population don't hold credit card, only 29% have it. 
+
+
+2) Personal Loan category
+```{r, message=FALSE, warning=FALSE}
+ggplot(UniversalBank, aes(x=`Personal Loan`, y=..prop..,group = 1)) + 
+  geom_bar(fill="cornsilk2") +
+  theme_classic() + 
+  geom_text(aes(label=round(..prop..,2)),stat = "count",
+            position = position_stack(vjust=0.5)) + 
+  labs(y = 'Proportion', title = "Proportion of Personal Loan category") + 
+  scale_x_discrete(labels = c("Loan Deined","Loan Accepted"))
+```
+
+
+From the above graph we can see that only around 10% of population accepted loan and rest rejected it. 
+
+
+3) Online category
+```{r, message=FALSE, warning=FALSE}
+ggplot(UniversalBank, aes(x=Online, y=..prop..,group = 1)) + 
+  geom_bar(fill="azure2") + 
+  theme_classic() + 
+  geom_text(aes(label=round(..prop..,2)),stat = "count",
+            position = position_stack(vjust=0.5)) + 
+  labs(x="Online Banking users",y = 'Proportion',title = "Proportion of Online Banking users") + 
+  scale_x_discrete(labels = c("Non Users","Users"))
+```
+
+
+From the above graph we can infer that around 60% of population using online banking services, and remaining 40% not opted for it. 
+
+
+Proportion of Credit Card users
+```{r}
+as.data.frame(prop.table(table(UniversalBank[c("CreditCard","Personal Loan")]))) %>% 
+  ggplot(aes(x=CreditCard,y=Freq,fill=Personal.Loan)) + geom_col() + 
+  geom_text(aes(label=round(Freq,2)),position = position_stack(vjust = 0.5),size=2.8) + 
+  theme_classic() + labs( y = 'Proportion', title = "Proportion of Credit Card users") + 
+  scale_x_discrete(labels = c("Non Card Holders","Card Holders")) + 
+  theme(legend.title = element_blank()) + 
+  scale_fill_manual(labels = c("Loan Rejected","Loan Accepted"), 
+                    values = c("azure2","light blue"))
+```
+
+
+Proportion of Online Banking users
+```{r}
+as.data.frame(prop.table(table(UniversalBank[c("Online","Personal Loan")]))) %>% 
+  ggplot(aes(x=Online,y=Freq,fill=Personal.Loan)) + geom_col() + 
+  geom_text(aes(label=round(Freq,2)),position = position_stack(vjust = 0.5)) + theme_classic() + 
+  labs(x="Online Banking users",y = 'Proportion',title = "Proportion of Online Banking users") + 
+  scale_x_discrete(labels = c("Non Users","Users")) + 
+  theme(legend.title = element_blank()) + 
+  scale_fill_manual(labels = c("Loan Rejected","Loan Accepted"), 
+                    values = c("azure2","light blue"))
+```
+
+
+#### Pre-Processing of data
+**Splitting dataset into training (60%) and validation (40%) sets**
+```{r, message=FALSE, warning=FALSE}
+set.seed(22)
+index <- createDataPartition(UniversalBank$`Personal Loan`, p=0.6, list = FALSE)
+UniversalBank_train_df <- UniversalBank[index,]
+UniversalBank_val_df <- UniversalBank[-index,]
+```
+
+
+*Q1:* Creating pivot table for the training data using melt() and cast() functions.
+```{r, message=FALSE, warning=FALSE}
+UniversalBank_melt <- melt(UniversalBank_train_df, id = c("CreditCard","Personal Loan"), 
+  variable = "Online")
+UniversalBank_cast <- dcast(UniversalBank_melt, CreditCard+`Personal Loan` ~ Online)
+(pivottable1 <- UniversalBank_cast %>% select(CreditCard,`Personal Loan`,Online))
+```
+
+
+*Q2:* Probability of Loan acceptance rate for customer who has credit card and is actively using online banking services.
+```{r, message=FALSE, warning=FALSE}
+(loanacceptance_rate <- (pivottable1[4,"Online"]/sum(pivottable1[4,"Online"],
+                                                     pivottable1[3,"Online"])))
+```
+
+
+*Q3:* Creating two separate pivot tables for the training data.
+
+
+*i:* Table 1 will have Loan (rows) as a function of Online (columns).
+```{r, message=FALSE, warning=FALSE}
+UniversalBank_melt_t1 <- melt(UniversalBank_train_df,id = c("Personal Loan"),variable = "Online")
+UniversalBank_cast_t1 <- dcast(UniversalBank_melt_t1, `Personal Loan` ~ Online)
+(UniversalBank_cast_t1 %>% select(`Personal Loan`,Online))
+```
+
+
+*ii:* Table 2 will have Loan (rows) as a function of CC.
+```{r, message=FALSE, warning=FALSE}
+UniversalBank_melt_t2 <- melt(UniversalBank_train_df,id = c("CreditCard"),
+  variable = "Online")
+UniversalBank_cast_t2 <- dcast(UniversalBank_melt_t2, CreditCard ~ Online)
+UniversalBank_cast_t2 %>% select(CreditCard,Online)
+```
+
+
+*Q4:* Computing quantities.
+
+*Sub Table 1:* with Credit Card(rows) and Personal Loan(columns) details.    
+```{r, message=FALSE, warning=FALSE}
+(st1 <- table(UniversalBank_train_df[c("CreditCard","Personal Loan")]))
+```
+
+
+*Sub Table 2:* with Online(rows) and Personal Loan(columns) details.    
+```{r, message=FALSE, warning=FALSE}
+(st2 <- table(UniversalBank_train_df[c("Online","Personal Loan")]))
+```
+
+
+*Sub Table 3:* only with Personal Loan count.    
+```{r, message=FALSE, warning=FALSE}
+(st3 <- table(UniversalBank_train_df["Personal Loan"]))
+```  
+
+
+*i:* P(CC = 1 | Loan = 1)  
+```{r, message=FALSE, warning=FALSE}
+(q1_prob <- (st1[2,2]/(st1[2,2] + st1[1,2])) * 100)
+```
+[84 / (84 + 204) = 29.16%]
+
+
+*ii:* P(Online = 1 | Loan = 1) 
+```{r, message=FALSE, warning=FALSE}
+(q2_prob <- (st2[2,2]/(st2[2,2] + st2[1,2])) * 100)
+```
+[165 / (165 + 123) = 57.29%]
+
+
+*iii:* P(Loan = 1)
+```{r, message=FALSE, warning=FALSE}
+(q3_prob <- (st3[2]/(st3[2] + st3[1])) * 100)
+```
+[288 / (288 + 2712) = 9.6%]
+
+
+*iv:* P(CC = 1 | Loan = 0)
+```{r, message=FALSE, warning=FALSE}
+(q4_prob <- (st1[2,1]/(st1[2,1] + st1[1,1])) * 100)
+```
+[792 / (792 + 1920) = 29.20%]
+
+
+*v:* P(Online = 1 | Loan = 0)
+```{r, message=FALSE, warning=FALSE}
+(q5_prob <- (st2[2,1]/(st2[2,1] + st2[1,1])) * 100)
+```
+[1638 / (1638 + 1074) = 60.39%]
+
+
+*vi:* P(Loan = 0)
+```{r, message=FALSE, warning=FALSE}
+(q6_prob <- (st3[1]/(st3[1] + st3[2])) * 100)
+```
+[2712 / (2712 + 288) = 90.4%]
+
+
+*Q5:* Using naive Bayes probability to compute P(Loan = 1 | CC = 1,Online = 1).
+```{r}
+(nb_prob <- (q1_prob * q2_prob * q3_prob) / ((q1_prob * q2_prob * q3_prob) + 
+ (q4_prob * q5_prob * q6_prob)))
+```
+[((84 / (84 + 204))*(165 / (165 + 123))*(288 / (288 + 2712)))/((84 / (84 + 204))*(165 / (165 + 123))*(288 / (288 + 2712)) + (792 / (792 + 1920))*(1638 / (1638 + 1074))*(2712 / (2712 + 288))) = 9.14%]
+
+
+*Q6:* Comparing above value with the one obtained from the pivot table in (B). 
+
+The value obtained from above question(naive Bayes probability) is **0.0914** which is almost similar to pivot table(B) value **0.09589**, but pivot table(B) provides exact probability value while naive bayes has slight change in probability value, but the order will be maintained.
+
+
+
+*Q7:* Using naive Bayes model for computing P(Loan = 1 | CC = 1, Online = 1)  
+```{r}
+# Build a naive Bayes classifier
+nb_train <-  UniversalBank_train_df
+nb_test <- UniversalBank_val_df
+nb_model <-  naiveBayes(`Personal Loan`~.,data=nb_train)
+```
+
+
+**priori probabilities of Personal Loan** 
+```{r}
+prop.table(nb_model$apriori)
+```
+
+
+**Conditional probabilities of CreditCard** 
+```{r}
+nb_model$tables$CreditCard
+```
+
+
+**Conditional probabilities of Online**
+```{r}
+nb_model$tables$Online
+```
+
+
+From the above results we can see that priori probabilities of naive Bayes wrt loan acceptance(1) is **0.096** which is almost similar to the question 5.
+
+
+Now, using the nb_model on the test set
+```{r}
+predictions_prob <- predict(nb_model, nb_test)
+```
+
+
+**Confusion Matrix of nb_model**
+```{r}
+confusionMatrix(nb_test$`Personal Loan`, predictions_prob)
+```
+
+
+**ROC Curve**
+```{r}
+predictions_prob1 <- predict(nb_model, nb_test, type = "raw")
+roc(nb_test$`Personal Loan`, predictions_prob1[,2])
+plot.roc(nb_test$`Personal Loan`, predictions_prob1[,2])
+```
+
+

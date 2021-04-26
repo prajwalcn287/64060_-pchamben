@@ -1,1 +1,217 @@
-new
+---
+title: "Hierarchical clustering"
+author: "Prajwal C N"
+date: "`r format(Sys.time(), '%d %B %Y')`"
+output:
+  prettydoc::html_pretty:
+    theme: cayman
+---
+
+
+### Problem Statement
+The elementary public schools would like to choose a set of cereals to include in their daily cafeterias. Every day a different cereal is offered, but all cereals should support a healthy diet. The goal of this problem is to find the cluster of “healthy cereals.”
+
+
+### Loading R libraries 
+```{r, warning=FALSE, message=FALSE}
+library(readr)
+library(tidyverse)
+library(cluster)
+library(caret)
+library(dendextend)
+library(factoextra)
+library(RColorBrewer)
+```
+
+
+### Importing Dataset
+The dataset `Cereals.csv` includes nutritional information, store display, and consumer ratings for 77 breakfast cereals.
+```{r, message = FALSE}
+Cereals <- read_csv("Cereals.csv")
+
+# Examining the dataset
+glimpse(Cereals)
+
+```
+
+
+*Q1:*  Applying hierarchical clustering to the data using Euclidean distance to the normalized measurements, and using Agnes to compare the clustering from single, complete, average, and Ward linkage methods and choosing the best method.
+
+
+### Data Preparation
+#### Data cleaning and Scaling
+```{r}
+# Checking NULL values in the dataset at column level.
+colSums(is.na(Cereals))
+
+# Removing missing values which are present in the Cereals dataset
+Cereals <- na.omit(Cereals)
+
+# Using only the numerical variables for clustering
+Cereals_numeric <- Cereals %>% select_if(is.numeric)
+head(Cereals_numeric)
+
+#Scaling the dataset using (Z-Score) standardization 
+Scaled_Cereals <- as.data.frame(scale(Cereals_numeric))
+```
+
+
+### Model Construction
+From the problem statement, we infer that this problem falls under **Unsupervised Learning**. Hence I sought to use **Hierarchical Clustering** technique to find out the patterns and group similar objects into clusters.
+
+Using Agnes method to compare the clustering from `Single`, `Complete`, `Average`, and `Ward` linkage methods. 
+```{r, warning=FALSE, message=FALSE}
+# methods to assess
+m <- c( "average", "single", "complete", "ward")
+names(m) <- c( "average", "single", "complete", "ward")
+
+```
+
+
+Defining a function to compute coefficient of the linkage methods. The function argument takes a `character vector(x)` as an input which matches the argument `method` of `agnes` function. 
+```{r}
+ac <- function(x) {
+  agnes(Scaled_Cereals, metric = "euclidean", method = x)$ac
+}
+```
+
+Mapping character vector and `ac` function using map function which return the vector of linkage coefficients.
+```{r}
+map_dbl(m, ac)
+```
+
+From above Agnes function we can see that **`r names(which.max(map_dbl(m, ac)))` linkage** has strong clustering structure, with agglomerative coefficient of **`r round(max(map_dbl(m, ac)), 2)`**, So choosing **`r names(which.max(map_dbl(m, ac)))` linkage method** for further cluster analysis.
+
+
+*Q2:* Estimating the optimal number of clusters.
+```{r, warning=FALSE, message=FALSE}
+# Hierarchical clustering using Ward Linkage
+hc_cereals <- agnes(Scaled_Cereals, method = "ward")
+```
+
+#### Visualizing the Dendogram
+Passing model object `hc_cereals` to `pltree` to produce `dendogram`.
+```{r}
+pltree(hc_cereals, cex = 0.7, hang = -1, main = "Dendrogram of Agnes") 
+```
+
+
+From below dendrogram, we observe that cut associated with largest gaps generates `2` clusters.  
+```{r, echo=FALSE}
+plot(as.dendrogram(hc_cereals))
+abline(h = 11.7, lty = 2)
+```
+```{r, echo=FALSE}
+pltree(hc_cereals, cex = 0.7, hang = -1, main = "Dendrogram of Agnes")
+rect.hclust(hc_cereals, k = 5, border = 2:5)
+```
+
+
+Hierarchical clustering is used to determine the optimal number of clusters. This optimal number of clusters can be determined by looking at the largest difference of heights. So from above analysis choosing optimal number of clusters **k = 5**
+
+
+*Q3:* Checking Cluster stability
+
+
+```{r, warning=FALSE, message=FALSE}
+# Cutting the tree
+cluster_assignment <- cutree(hc_cereals, k=5)
+cereals_clustered <- mutate(Scaled_Cereals, cluster = cluster_assignment)
+
+# partitioning the cluster
+set.seed(150)
+index <- createDataPartition(cereals_clustered$cluster, p = 0.7, list = FALSE)
+part_A <- cereals_clustered[index,]
+part_B <- cereals_clustered[-index,]
+
+# Finding cluster centroid for partition A
+part_A_centroids <- part_A %>% gather("features","values",-cluster) %>% 
+  group_by(cluster,features) %>% summarise(mean_values = mean(values)) %>% 
+  spread(features,mean_values)
+
+cluster_prediction_B <- data.frame(data=seq(1,nrow(part_B),1),
+                                   Partition_B_cluster=rep(0,nrow(part_B)))
+
+# Here row binding each test data datapoint to partition a centroids, 
+# and finding the minmum distance from each cluster centroid.
+for (x in 1:nrow(part_B)) {
+  cluster_prediction_B$Partition_B_cluster[x] <-
+    
+    which.min(as.matrix(get_dist(as.data.frame(
+      rbind(part_A_centroids[-1], part_B[x, -length(part_B)])
+    )))[6, -6])
+}
+
+# Comparing Partition B data labels  with the original data labels.
+cluster_prediction_B <- cluster_prediction_B %>% mutate(original_clusters = part_B$cluster)
+mean(cluster_prediction_B$Partition_B_cluster == cluster_prediction_B$original_clusters)
+```
+
+
+As per the above analysis both the original and predicted clusters are matching. Hence conculding clusters have good stability. 
+
+
+*Q4:* Finding a cluster of “healthy cereals.” 
+
+Finding centroids of each cluster to determined the cluster characteristics.
+```{r}
+split_data <- split(cereals_clustered, cereals_clustered$cluster)
+split_means <- lapply(split_data, colMeans)
+(centroids <- do.call(rbind, split_means))
+```
+
+**Visualizing the clusters**  
+```{r, fig.align='center', fig.height=7, fig.width=10}
+hm.palette <-
+  colorRampPalette(rev(brewer.pal(9, 'Greens')), space = 'Lab')
+data.frame(centroids) %>% gather("features", "values",-cluster) %>%
+  ggplot(aes(
+    x = factor(cluster),
+    y = features,
+    fill = values
+  )) + 
+  geom_tile() + theme_classic() +
+  theme(
+    axis.line = element_blank(),
+    legend.position = "top",
+    legend.justification = "left",
+    plot.title = element_text(hjust = 0.5),
+    legend.title = element_blank(),
+    legend.key.width = unit(4.5, "cm")
+  ) +
+  scale_x_discrete(expand = c(0, 0)) +
+  scale_fill_gradientn(colours = hm.palette(100)) +
+  labs(title = "Cluster Characteristics",
+       x = "Clusters",
+       y = "Features",
+       fill = "Centroids")
+```
+
+From the above graph we can infer that all cluster patterns are different, Please find below analysis for all 5 individual clusters. 
+
+
+1) **Cluster1(*Bran Cereals*)**: Cereals fall under cluster1 is *high in vitamins, protein, potassium, fibers and moderate vitamins* and it has *less carbohydrates, sugar and calories*, and along with it has *high rating and good shelf life*.
+
+
+2) **Cluster2(*Hot Cereals*)**: Cereals fall under cluster2 has *good vitamins, protein, potassium, fibers, calories*, but also it has *high sugar, fat, weight*.
+
+
+3) **Cluster3(*Sugary Cereals*)**: Cereals fall under cluster3 is *high in sugar, sodium,carbohydrates, fat* and along with this it has *low vitamins, protein, potassium, fibers* compare to other clusters.
+
+
+4) **Cluster4(*Organic Cereals*)**: Cereals fall under cluster4 is *High in all components*, but also *high in sodium,carbohydrates* compare to other clusters.
+
+
+5) **Cluster5(*Whole Grain Cereals*)**: Cereals fall under cluster5 is *low in sodium and sugars* compare to clusters.
+
+
+Some type of cereals are healthier than others. Few Cereals are generally marketed towards children and are sometimes made up of 50% sugar, the packaging of that products can also be misleading because they boast only their good qualities, such as added fibers or essential vitamins. Healthy cereals,however are not coated in sugar or available in fun colors of shapes. Studies show that less sugar, less sodium and more fiber are good for kids and adults.  
+
+
+**From the above cluster analysis and facts we can infer that cluster1 is healthy for kids. So this can be recommended for elementary public schools in their daily meals**
+
+**and we have to normalize the data so that the scale of each variable is the same. If the scale of the variables is not the same, the model might become biased towards the variables with a higher magnitude.**
+
+*Note:*  
+The above domain information is referred from the below link    
+http://www.historyofcereals.com/cereal-facts/types-of-cereals/

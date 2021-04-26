@@ -91,17 +91,17 @@ hc_cereals <- agnes(Scaled_Cereals, method = "ward")
 
 #### Visualizing the Dendogram
 Passing model object `hc_cereals` to `pltree` to produce `dendogram`.
-```{r}
+```{r, fig.align='center'}
 pltree(hc_cereals, cex = 0.7, hang = -1, main = "Dendrogram of Agnes") 
 ```
 
 
 From below dendrogram, we observe that cut associated with largest gaps generates `2` clusters.  
-```{r, echo=FALSE}
+```{r, echo=FALSE, fig.align='center'}
 plot(as.dendrogram(hc_cereals))
 abline(h = 11.7, lty = 2)
 ```
-```{r, echo=FALSE}
+```{r, echo=FALSE, fig.align='center'}
 pltree(hc_cereals, cex = 0.7, hang = -1, main = "Dendrogram of Agnes")
 rect.hclust(hc_cereals, k = 5, border = 2:5)
 ```

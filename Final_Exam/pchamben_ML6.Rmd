@@ -1,0 +1,419 @@
+---
+title: "Market Segmentation"
+author: "Prajwal C N"
+date: "`r format(Sys.time(), '%d %B %Y')`"
+output:
+  prettydoc::html_pretty:
+    theme: architect
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(fig.align = 'center', fig.width = 10, message=FALSE, warning=FALSE)
+```
+
+### Problem Statement
+CRISA has traditionally segmented markets on the basis of purchaser demographics. They would now like to segment the market based on two key sets of variables more directly related to the purchase process and to brand loyalty:
+
+
+1. Purchase behavior (volume, frequency, susceptibility to discounts, and brand loyalty)
+2. Basis of purchase (price, selling proposition) 
+
+
+Doing so would allow CRISA to gain information about what demographic attributes are associated with different purchase behaviors and degrees of brand loyalty, and thus deploy promotion budgets more effectively.
+
+
+```{r, warning=FALSE, message=FALSE, include=FALSE}
+library(readr)
+library(tidyverse)
+library(caret)
+library(ggplot2)
+library(factoextra)
+library(cowplot)
+library(e1071)
+library(knitr)
+```
+
+
+### Importing Dataset
+The dataset `BathSoap.csv` includes data of demographics, purchase summary, and basis for purchase for 600 customers.
+```{r, message = FALSE}
+BathSoap <- read_csv("BathSoap.csv")
+
+# Examining the dataset
+glimpse(BathSoap)
+
+```
+
+
+From above examination, few numeric columns are considered as character columns, since they are appended with special character `%`. Hence special character must be removed in order to convert into numeric columns. 
+
+
+### Data Preparation
+#### Data cleaning and Exploratory Data Analysis
+```{r}
+# Converting all character variable values to numeric.
+BathSoap <- BathSoap %>%
+  mutate_if(
+    .predicate = is.character,
+    .funs = function(x)
+      as.numeric(str_replace_all(x, "%", ""))
+  ) 
+
+# Checking NULL values in the dataset at column level.
+any(colSums(is.na(BathSoap)) != 0)
+```
+
+
+**Step1: Applying K-Means model on demographic data**
+```{r}
+# Scaling Demographic variables
+Demographic_scale <- BathSoap %>%
+  select(SEC,FEH,MT,SEX,AGE,EDU,HS,CHILD,CS,`Affluence Index`) %>% mutate_all(scale)
+
+
+# Applying WSS and silhouette methods on scaled Demographic data
+Demographic_scale_wss <- fviz_nbclust(Demographic_scale, FUNcluster = kmeans,
+                                      method = "wss")
+Demographic_scale_sil <- fviz_nbclust(Demographic_scale, FUNcluster = kmeans,
+                                      method = "silhouette")
+
+plot_grid(Demographic_scale_wss, Demographic_scale_sil) 
+```
+
+
+Obtained optimal clusters 2 in silhouette and 3 in WSS method, so verifying kmeans model on Demographic data with both `k = 2` and `k = 3`
+
+
+Applying kmeans model on scaled demographics data with `k = 2`
+```{r}
+set.seed(230)
+Demographic_kmeans2 <- kmeans(Demographic_scale,centers = 2, nstart = 25)
+
+# Visualizing the cluster for k=2
+fviz_cluster(Demographic_kmeans2, data = Demographic_scale)
+```
+
+
+Applying cluster labels to `BathSoap` dataset and investigating further.
+```{r}
+BathSoap_clus <-
+  BathSoap %>% 
+  mutate(cluster = Demographic_kmeans2$cluster) %>%
+  arrange(cluster)
+
+# Bifurcating data based on clusters
+cluster_group <- split(BathSoap_clus, BathSoap_clus$cluster)
+
+# Inspecting Cluster 2
+head(cluster_group[[2]])
+tail(cluster_group[[2]])
+```
+
+From given data description, we have:  
+
+
+* SEX has `1 = male, 2 = female`  
+
+* EDU has `1 to 9 Levels`  
+
+* CS has `1 = available, 2 = unavailable`
+
+* CHILD has `1 to 4 Levels`
+
+
+By inferring from `Cluster 2` we see that, most of demographic data are unspecified, which means values are `0` for `SEX`,`FEH`,`EDU`,`CS` and `CHILD` variable has level `5` as unspecified. 
+```{r}
+# So verifying if cluster 2 & cluster 1 dataset has any unspecified demographic data.
+# cluster 2 
+cluster_group[[2]] %>% 
+  filter( FEH != 0 | MT != 0 | SEX !=0 | EDU != 0 | HS !=0 | CHILD != 5 | CS != 0) %>% 
+  nrow()
+
+# cluster 1
+cluster_group[[1]] %>% 
+  filter( FEH != 0 | MT != 0 | SEX !=0 | EDU != 0 | HS !=0 | CHILD != 5 | CS != 0) %>% 
+  nrow()
+```
+
+From above analysis we found that `cluster 2` has only unspecified data and the other Cluster has clean data, which means `cluster 1` customers have given there information correctly. 
+
+Now verifying optimal clusters with `k = 3`
+```{r}
+Demographic_kmeans3 <- kmeans(Demographic_scale, centers = 3, nstart = 25)
+
+# Visualizing the cluster for k=3
+fviz_cluster(Demographic_kmeans3, data=Demographic_scale)
+```
+
+The above cluster analysis depicts `Cluster 2` has unspecified data and `Cluster 1` and `Cluster 3` are segmented further.
+
+**Since data in `Cluster 2` are unspecified, so considering `Cluster 1` and `Cluster 3` as significant data for model.**
+
+### Measuring Brand Loyalty  
+
+**Assuming if a customer purchases more than 50% of volume at any specific brand, we considering those customers as loyal**
+```{r}
+# Adding new brand loyalty column, which says 1 has loyal and 0 has non-loyal.
+BathSoap_bl <- cluster_group[[1]] %>% 
+  mutate(brandloyalty = apply(cluster_group[[1]] %>% 
+                                select(starts_with("br.")), 1,
+                              function(x){ifelse(max(x) > 50, 1,0)}))
+
+head(
+  BathSoap_bl %>% 
+    select(brandloyalty, starts_with("Br."), `Others 999`) %>% 
+    arrange(desc(brandloyalty))
+)
+```
+
+
+### Question 1
+
+#### 1a : The variables that describe purchase behavior (including brand loyalty)
+```{r}
+# Considering all purchase related variables including brand loyalty
+purchase_behavior <- BathSoap_bl %>% 
+  select(`No. of Brands`,`Brand Runs`,`No. of  Trans`,Value,`Avg. Price`,
+         `Total Volume`,`Pur Vol No Promo - %`,`Pur Vol Promo 6 %`,
+         `Pur Vol Other Promo %`,brandloyalty) %>% mutate_all(scale)
+
+# Applying wss and silhouette method on purchase_behavior variables to find optimal k
+
+purchase_behavior_wss <-
+  fviz_nbclust(purchase_behavior, FUNcluster = kmeans, method = "wss")
+purchase_behavior_sil <-
+  fviz_nbclust(purchase_behavior, FUNcluster = kmeans, method = "silhouette")
+
+plot_grid(purchase_behavior_wss, purchase_behavior_sil)
+```
+From above both wss and silhouette methods showing k=3, So choosing optimal number of clusters to 3. 
+
+```{r}
+purchase_behavior_kmeans3 <- kmeans(purchase_behavior, centers = 3, nstart = 25)
+fviz_cluster(purchase_behavior_kmeans3, data = purchase_behavior)
+```
+
+
+**Purchase behavior cluster analysis**
+```{r}
+as.data.frame(purchase_behavior_kmeans3$centers) %>% rowid_to_column %>%
+  gather("features", "centers", -rowid) %>%
+  ggplot(aes(features, centers, color = factor(rowid))) +
+  geom_line(aes(group = factor(rowid))) +
+  theme(
+    axis.text.x = element_text(hjust = 0.9, angle = 60),
+    legend.position = "top",
+    legend.justification = "left",
+    legend.title = element_blank()
+  ) +
+  geom_point() + labs(title = "Purchase behavior cluster analysis") +
+  scale_color_discrete(labels = c(
+    "Variety-seeking customers",
+    "Habitual customers",
+    "Complex customers"
+  ))
+```
+
+From the above plot, characteristics of clusters are described as below:
+
+**Variety-seeking customers**(Cluster 1) : customer falls under this category are like to try wide variety of products and favoring many brand, and also they have high number of transactions, total volume and value.
+
+
+**Habitual customers** (Cluster 2) : customer falls under this category are loyal, favoring main brands and purchasing products without much relying on promos or vouchers.
+
+
+**Complex customers**(Cluster 3) : this customers are highly involved in decision-making process, who purchases product only with promos or vouchers and also switching between brands.
+
+
+
+#### 1b : The variables that describe the basis for purchase.
+```{r}
+# Scaling basis for purchase data
+purchase_basis <-
+  BathSoap_bl %>% select(starts_with("Pr")) %>% mutate_all(scale)
+
+# Applying wss and silhouette method on purchase_behavior variables to find optimal k
+purchase_basis_wss <-
+  fviz_nbclust(purchase_basis, FUNcluster = kmeans, method = "wss")
+purchase_basis_sil <-
+  fviz_nbclust(purchase_basis, FUNcluster = kmeans, method = "silhouette")
+
+plot_grid(purchase_basis_wss, purchase_basis_sil)
+```
+
+From above WSS method we see that optimal number of clusters is 3 and silhouette method is 10, Since the marketing efforts would support two to five different promotional approaches. So choosing optimal number of clusters to `k = 3` and analyzing further.
+
+```{r}
+purchase_basis_kmeans3 <- kmeans(purchase_basis, centers = 3, nstart = 25)
+fviz_cluster(purchase_basis_kmeans3, data= purchase_basis)
+```
+
+**Basis of purchase cluster analysis**
+```{r}
+as.data.frame(purchase_basis_kmeans3$centers) %>% rowid_to_column %>%
+  gather("features", "centers", -rowid) %>%
+  ggplot(aes(features, centers, color = factor(rowid))) +
+  geom_line(aes(group = factor(rowid))) +
+  theme(
+    axis.text.x = element_text(hjust = 0.9, angle = 60),
+    legend.position = "top",
+    legend.justification = "left",
+    legend.title = element_blank()
+  ) +
+  geom_point() + labs(title = "Basis of purchase cluster analysis") +
+  scale_color_discrete(labels = c(
+    "Competitor-based positioning",
+    "Attribute-based & Price-based positioning",
+    "Price-based positioning"
+  ))
+```
+
+From the above plot, characteristics of clusters are described as below:
+
+**Competitor-based positioning** (Cluster 1): As we already know these are `variety-seeking customers`, and they are buying goods almost equally from all price categories and selling proportion is also almost same across all proportions.
+
+**Attribute-based and Price-based positioning** (Cluster 2): As we know these are `Habitual customers` and they are purchasing products mainly from `price category 3` and along with that they are buying products in high proportions like `proportion category 5`.
+
+**Price-based positioning** (Cluster 3): As we know these are `Complex customers` who mostly purchase products with promo codes, so they are purchasing mainly on `price category 1`.
+
+
+#### 1c : The variables that describe both purchase behavior and basis of purchase
+```{r}
+purchase_behavior_basis <-
+  cluster_group[[1]] %>% select(
+    SEC,
+    FEH,
+    MT,
+    SEX,
+    AGE,
+    EDU,
+    HS,
+    CHILD,
+    CS,
+    `Affluence Index`,
+    `Trans / Brand Runs`,
+    `Vol/Tran`
+  ) %>% mutate_all(scale) %>% cbind(purchase_basis, purchase_behavior)
+
+
+purchase_behavior_basis_wss <-
+  fviz_nbclust(purchase_behavior_basis,
+               FUNcluster = kmeans,
+               method = "wss")
+purchase_behavior_basis_sil <-
+  fviz_nbclust(purchase_behavior_basis,
+               FUNcluster = kmeans,
+               method = "silhouette")
+
+plot_grid(purchase_behavior_basis_wss,purchase_behavior_basis_sil)
+```
+
+
+From above WSS method we see that optimal number of clusters is 3 and silhouette method is 9, Since the marketing efforts would support two to five different promotional approaches. So choosing optimal number of clusters to `k = 3` and analyzing further.
+
+
+```{r}
+purchase_behavior_basis_kmeans3 <-
+  kmeans(purchase_behavior_basis,
+         centers = 3,
+         nstart = 25)
+fviz_cluster(purchase_behavior_basis_kmeans3, data = purchase_behavior_basis)
+```
+
+
+**Demographics, purchase behavior and basis of purchase cluster analysis**
+```{r}
+data.frame(purchase_behavior_basis_kmeans3$centers) %>%
+  rowid_to_column() %>%
+  gather("features", "centers", -rowid) %>%
+  ggplot(aes(features, centers, color = factor(rowid))) +
+  geom_line(aes(group = factor(rowid))) +
+  theme(
+    axis.text.x = element_text(hjust = 0.9, angle = 60),
+    legend.position = "top",
+    legend.justification = "left",
+    legend.title = element_blank()
+  ) +
+  geom_point() + 
+  labs(title = "Demographics, purchase behavior and basis of purchase cluster analysis") +
+  scale_color_discrete(
+    labels = c(
+      "Low-income households",
+      "Highly affluent households",
+      "Middle-income households"
+    )
+  )
+```
+
+
+From the above plot, characteristics of clusters are described as below:
+
+**Low-income households**(Cluster 1): we know these are `Habitual customers` and tends to buy products with same price category and also purchasing proportions are very high and along with that these customers falls under low affluence index and socioeconomic class compare to other 2 clusters, So Developing effective marketing strategies and digital advertising helps to target them better. 
+
+
+**Highly affluent households**(Cluster 2): we know that these are `Complex customers` and they are and selective in their buying behavior and they tend to shop when any promo codes available and also these customers have high affluence index and socioeconomic class, and they may tend to buy good with high value. So Stronger marketing messages and more discounts or vouchers to be given, in order to attract this customers.
+
+**Middle-income households**(Cluster 3): As we already know from above 2 analysis, customers under this category are `variety-seeking customers` and do not reply on any particular brand, and they fall under Middle-income category based on affluence index and socioeconomic class and also they tend to switch between all price categories and proportions, So targeting them is not much useful.
+
+```{r}
+cluster_group[[1]] %>%
+  mutate(cluster = purchase_behavior_basis_kmeans3$cluster) %>%
+  group_by(cluster, SEC) %>%
+  summarise(count = n(), .groups = "keep") %>%
+  mutate(cluster = factor(
+    x = cluster,
+    levels = c(1, 2, 3),
+    labels = c(
+      "Low-income households",
+      "Highly affluent households",
+      "Middle-income households"
+    )
+  )) %>% 
+ggplot(aes(SEC, count)) +
+  geom_col(fill = "mediumblue")+ 
+  labs(title = "Socio Economic Status of Clusters",
+       subtitle = "Economic Status 1: High - 4:Low", 
+       x = "Socio Ecomonic Status of the Customers") +
+  facet_wrap(. ~ cluster) 
+```
+The above plot substantiate the economic status of the customers in each cluster.
+
+### Classifier
+Building a Classifier to predict the cluster to which a customer belongs to, which will be helpful to determine the customers to be targeted for mail promotions. Choosing `Naive Bayes Classifier` since the target variable(clusters) has multi-levels.
+```{r}
+#naive bayes model
+nb_data_prep <- purchase_behavior_basis %>% 
+  cbind(cluster = purchase_behavior_basis_kmeans3$cluster)
+
+
+set.seed(22)
+index <- createDataPartition(nb_data_prep$cluster, p=0.6, list = FALSE)
+
+# Train Split(60%)
+nb_data_prep_train_df <- nb_data_prep[index,]
+
+# Test split(40%)
+nb_data_prep_val_df <- nb_data_prep[-index,]
+
+
+nb_model <- naiveBayes(cluster ~., data = nb_data_prep_train_df, laplace = 0.1)  
+pred_labels <- predict(nb_model, nb_data_prep_val_df %>% select(-cluster))
+  
+confusionMatrix(pred_labels, factor(nb_data_prep_val_df$cluster))
+```
+The above model produced `r round(confusionMatrix(pred_labels, factor(nb_data_prep_val_df$cluster))$overall[1], 2) * 100`% accuracy.  
+
+
+
+*Domain knowledge References:*
+
+Purchase behaviors:  https://instapage.com/blog/behavioral-segmentation  
+
+
+Basis of purchase: https://www.yieldify.com/blog/stp-marketing-model/  
+
+
+Demographics + Purchase behaviors + Basis of purchase: https://fyi.extension.wisc.edu/downtown-market-analysis/understanding-the-market/demographics-and-lifestyle-analysis/  
+
+
+https://www.qualtrics.com/experience-management/brand/what-is-market-segmentation/
